@@ -301,6 +301,25 @@ async def structure_data_from_html(request: StructureRequest):
         Infer the overall document metadata (currency, reporting period) from the content. 
         It is critical that the 'pageNumber' for each table in the output corresponds to the source page number indicated in the HTML comments (e.g., <!-- Page 4 -->).
         
+        IMPORTANT: Return ONLY valid JSON without any additional text, markdown formatting, or explanation.
+        The JSON should follow this structure:
+        {{
+          "tables": [
+            {{
+              "title": "Table title",
+              "columns": ["Column1", "Column2", ...],
+              "rawData": [["Row1Col1", "Row1Col2"], ["Row2Col1", "Row2Col2"], ...],
+              "pageNumber": 1
+            }}
+          ],
+          "metadata": {{
+            "currency": "Currency",
+            "reportingPeriod": "Period"
+          }}
+        }}
+        
+        Here are the HTML tables to analyze:
+        
         {html_input}"""
         
         model = genai.GenerativeModel(GEMINI_MODEL)
@@ -315,7 +334,31 @@ async def structure_data_from_html(request: StructureRequest):
             safety_settings=safety_settings
         )
         
-        parsed_json = json.loads(response.text)
+        # Ensure response is valid JSON
+        try:
+            # First try to parse directly
+            parsed_json = json.loads(response.text)
+        except json.JSONDecodeError:
+            # If that fails, try to extract JSON from the text
+            logger.info("Response is not valid JSON, trying to extract JSON from text")
+            
+            # Look for JSON-like structure in the text
+            text = response.text
+            
+            # Try to find JSON within markdown code blocks
+            json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+            if json_match:
+                try:
+                    parsed_json = json.loads(json_match.group(1))
+                    logger.info("Successfully extracted JSON from markdown code block")
+                except json.JSONDecodeError:
+                    # If still not valid JSON, create a simple structure
+                    logger.error(f"Failed to parse JSON from extracted text: {json_match.group(1)}")
+                    parsed_json = {"tables": [], "metadata": {"currency": "לא צוין", "reportingPeriod": "לא צוין"}}
+            else:
+                # If no JSON found, create a simple structure
+                logger.error("No JSON structure found in response")
+                parsed_json = {"tables": [], "metadata": {"currency": "לא צוין", "reportingPeriod": "לא צוין"}}
         
         # Process tables
         tables = []
